@@ -17,5 +17,3 @@ jobs:
         run: |
           git config user.name bot; git config user.email bot@users.noreply.github.com
           git add docs; git commit -m "news $(date -u +%F)" || true; git push
-      - name: Push notification
-        run: python notify.py morning-news-a2eb8d7d47 "☀️ 아침 경제뉴스" "$(cat push.txt)"

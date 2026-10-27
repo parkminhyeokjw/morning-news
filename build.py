@@ -1,4 +1,4 @@
-import urllib.request, xml.etree.ElementTree as ET, html, os, datetime, json, re
+import urllib.request, urllib.parse, xml.etree.ElementTree as ET, html, os, datetime, json, re
 
 FEEDS = [
     ("CNBC 톱뉴스", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
@@ -11,6 +11,22 @@ FEEDS = [
 ]
 N = 6
 
+def clean(x):
+    x = re.sub(r"<[^>]+>", " ", html.unescape(x or ""))
+    return re.sub(r"\s+", " ", x).strip()
+
+def tr(text):
+    if not text or re.search(r"[가-힣]", text):
+        return text
+    try:
+        u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q=" + urllib.parse.quote(text)
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return "".join(p[0] for p in json.loads(r.read())[0] if p[0])
+    except Exception as e:
+        print("TR FAIL", e)
+        return text
+
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=20) as r:
@@ -19,8 +35,13 @@ def fetch(url):
     for it in root.iter("item"):
         t = (it.findtext("title") or "").strip()
         l = (it.findtext("link") or "").strip()
+        d = clean(it.findtext("description"))
+        if len(d) > 280:
+            d = d[:280].rsplit(" ", 1)[0] + "…"
+        if d == t or d.startswith(t):
+            d = ""
         if t and l:
-            out.append((t, l))
+            out.append((tr(t), l, tr(d)))
         if len(out) >= N:
             break
     return out
@@ -41,8 +62,8 @@ date = kst.strftime("%Y-%m-%d (%a) %H:%M KST")
 body = ""
 for name, items in sections:
     body += f"<section><h2>{html.escape(name)}</h2><ul>"
-    for t, l in items:
-        body += f'<li><a href="{html.escape(l)}" target="_blank" rel="noopener">{html.escape(t)}</a></li>'
+    for t, l, d in items:
+        body += f'<li><a href="{html.escape(l)}" target="_blank" rel="noopener">{html.escape(t)}</a>' + (f'<p>{html.escape(d)}</p>' if d else '') + '</li>'
     body += "</ul></section>"
 
 page = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
@@ -57,7 +78,7 @@ main{{max-width:720px;margin:0 auto;padding:16px}}
 h1{{font-size:22px;margin:8px 0 2px}} .d{{color:var(--mut);font-size:13px;margin-bottom:12px}}
 section{{background:var(--card);border-radius:12px;padding:12px 16px;margin:12px 0}}
 h2{{font-size:15px;margin:0 0 6px;color:var(--ac)}}
-ul{{margin:0;padding-left:18px}} li{{margin:6px 0}}
+ul{{margin:0;padding-left:18px}} li{{margin:10px 0}} li p{{margin:2px 0 0;color:var(--mut);font-size:14px}}
 a{{color:var(--fg);text-decoration:none}} a:visited{{color:var(--mut)}}
 </style></head><body><main>
 <h1>☀️ 아침 경제·주요뉴스</h1><div class="d">{date} 업데이트</div>{body}
