@@ -1,4 +1,4 @@
-import urllib.request, urllib.parse, xml.etree.ElementTree as ET, html, os, datetime, json, re
+import time, urllib.request, urllib.parse, xml.etree.ElementTree as ET, html, os, datetime, json, re
 
 FEEDS = [
     ("CNBC 톱뉴스", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
@@ -15,17 +15,49 @@ def clean(x):
     x = re.sub(r"<[^>]+>", " ", html.unescape(x or ""))
     return re.sub(r"\s+", " ", x).strip()
 
-def tr(text):
-    if not text or re.search(r"[가-힣]", text):
-        return text
-    try:
-        u = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q=" + urllib.parse.quote(text)
-        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return "".join(p[0] for p in json.loads(r.read())[0] if p[0])
-    except Exception as e:
-        print("TR FAIL", e)
-        return text
+def _gt(text):
+    data = urllib.parse.urlencode({"client": "gtx", "sl": "en", "tl": "ko", "dt": "t", "q": text}).encode()
+    req = urllib.request.Request("https://translate.googleapis.com/translate_a/single", data=data,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return "".join(p[0] for p in json.loads(r.read())[0] if p[0])
+
+def _gm(text):
+    u = "https://translate.google.com/m?sl=en&tl=ko&q=" + urllib.parse.quote(text)
+    req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        m = re.search(r'class="result-container">(.*?)</div>', r.read().decode("utf-8"), re.S)
+    return html.unescape(m.group(1)) if m else None
+
+def tr_many(texts):
+    """한 번에 묶어서 번역 (429 방지). 실패 시 원문 유지."""
+    res = list(texts)
+    idx = [i for i, t in enumerate(texts) if t and not re.search(r"[가-힣]", t)]
+    if not idx:
+        return res
+    joined = "\n".join(texts[i] for i in idx)
+    for fn in (_gt, _gm):
+        for attempt in range(4):
+            try:
+                out = fn(joined)
+                lines = [x.strip() for x in out.split("\n") if x.strip()] if out else []
+                if len(lines) == len(idx):
+                    for i, l in zip(idx, lines):
+                        res[i] = l
+                    return res
+                print("TR MISMATCH", len(lines), len(idx))
+                break
+            except Exception as e:
+                print("TR FAIL", fn.__name__, e)
+                time.sleep(5 * (attempt + 1))
+    # 최후: 한 건씩 천천히
+    for i in idx:
+        try:
+            res[i] = _gt(texts[i])
+        except Exception as e:
+            print("TR FAIL single", e)
+        time.sleep(1.5)
+    return res
 
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -41,7 +73,7 @@ def fetch(url):
         if d == t or d.startswith(t):
             d = ""
         if t and l:
-            out.append((tr(t), l, tr(d), t, d))
+            out.append([t, l, d])
         if len(out) >= N:
             break
     return out
@@ -54,6 +86,9 @@ for name, url in FEEDS:
         print("FAIL", name, e)
         items = []
     if items:
+        ts = tr_many([x[0] for x in items] + [x[2] for x in items])
+        n = len(items)
+        items = [(ts[i], items[i][1], ts[n + i], items[i][0], items[i][2]) for i in range(n)]
         sections.append((name, items))
 
 kst = datetime.datetime.utcnow() + datetime.timedelta(hours=9)
